@@ -1,0 +1,91 @@
+// prisma/schema.prisma
+//
+// engineType = "client" runs queries through a JavaScript driver adapter (@prisma/adapter-pg)
+// instead of the Rust query engine. That is what lets us size the connection pool ourselves
+// (see src/lib/prisma.js) and report real pool statistics from /health.
+generator client {
+  provider   = "prisma-client-js"
+  engineType      = "client"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String
+  company   String?
+  createdAt DateTime  @default(now())
+  // Bonus: multi-tenancy
+  tenantId  Int       @default(1)
+  invoices  Invoice[]
+  posts     Post[]
+
+  // Emails are unique per tenant (two tenants may both have a client called bob@example.com)
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Invoice {
+  id            Int           @id @default(autoincrement())
+  invoiceNumber String
+  clientId      Int
+  client        Client        @relation(fields: [clientId], references: [id])
+  status        String        @default("DRAFT")
+  total         Float
+  currency      String        @default("KES")
+  dueDate       DateTime
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  // Bonus: multi-tenancy
+  tenantId      Int           @default(1)
+  items         InvoiceItem[]
+
+  // Task 1 indexes (migration add_indexes)
+  @@index([status])
+  @@index([dueDate])
+  @@index([status, createdAt])
+  @@index([status, dueDate])
+  @@index([clientId, status])
+  // Covering index for the GROUP BY query (status filter + clientId grouping + total summed)
+  @@index([status, clientId, total])
+
+  // Bonus indexes (migration add_multi_tenancy)
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, clientId])
+}
+
+model InvoiceItem {
+  id          Int     @id @default(autoincrement())
+  invoiceId   Int
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Int
+  unitPrice   Float
+  total       Float
+
+  // Foreign keys are NOT indexed automatically in PostgreSQL; loading an invoice's items needs this
+  @@index([invoiceId])
+}
+
+model Post {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String?
+  authorId  Int
+  author    Client   @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+  // Bonus: multi-tenancy
+  tenantId  Int      @default(1)
+
+  // Needed by the N+1 fix: "all posts for these authors" is a lookup by authorId
+  @@index([authorId])
+  @@index([tenantId])
+  @@index([tenantId, authorId])
+}
